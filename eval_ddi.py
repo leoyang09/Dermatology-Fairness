@@ -26,10 +26,13 @@ Examples:
 >>>import ddi_model
 >>>model = ddi_model.load_model("DeepDerm") # load DeepDerm model
 >>>eval_results = eval_ddi.eval_model(model, "DDI") # evaluate images in DDI folder
+
+(3) using local weights (e.g. from Zenodo)
+>>>python3 eval_ddi.py --model=DeepDerm --weights_path=path/to/deepderm.pth --data_dir=DDI
 """
 
 import argparse
-from ddi_dataset import DDI_Dataset, test_transform
+from ddi_dataset import DDI_Dataset
 from ddi_model import load_model
 import matplotlib.pyplot as plt
 import numpy as np
@@ -50,8 +53,12 @@ def get_args():
              " or CDANN).")
     parser.add_argument('--no_download', action='store_true', default=False,
         help="Set to disable downloading models.")
+    parser.add_argument('--weights_path', type=str, default=None,
+        help="Path to local weights file (e.g. from Zenodo). If set, model is loaded from this file instead of model_dir.")
     parser.add_argument('--data_dir', type=str, default="DDI", 
         help="Folder containing dataset to load. Structure should be: (1) `[data_dir]/images` contains all images; (2) `[data_dir]/ddi_metadata.csv` contains the CSV metadata for the DDI dataset")
+    parser.add_argument('--img_dir', type=str, default="images",
+        help="Name of the subdirectory in data_dir containing images (default: 'images').")
     parser.add_argument('--eval_dir', type=str, default="DDI-results", 
         help="Folder to store evaluation results.")
     parser.add_argument('--use_gpu', action='store_true', default=False,
@@ -61,7 +68,7 @@ def get_args():
     args = parser.parse_args()
     return args
 
-def eval_model(model, dataset, use_gpu=False, show_plot=False):
+def eval_model(model, dataset, use_gpu=False, show_plot=False, num_workers=0):
     """Evaluate loaded model on provided image dataset. Assumes supplied image 
     directory corresponds to `root` input for torchvision.datasets.ImageFolder
     class. Assumes the data is split into binary/malignant labels, as this is 
@@ -74,7 +81,7 @@ def eval_model(model, dataset, use_gpu=False, show_plot=False):
     dataloader = torch.utils.data.DataLoader(
                     dataset,
                     batch_size=32, shuffle=False,
-                    num_workers=0, pin_memory=use_gpu)
+                    num_workers=num_workers, pin_memory=use_gpu)
 
     # prepare model for evaluation
     model.to(device).eval()
@@ -112,7 +119,10 @@ def eval_model(model, dataset, use_gpu=False, show_plot=False):
             color="blue", linestyle="-", linewidth=2, 
             marker="o", markersize=2, 
             label=f"AUC={auc_est:.3f}")[0]
-        plt.show()
+        if args.eval_dir:
+            os.makedirs(args.eval_dir, exist_ok=True)
+            plot_path = os.path.join(args.eval_dir, f"{m_name}_ROC_{os.path.basename(dataset.root)}.png")
+            plt.savefig(plot_path)
         plt.close()
 
     eval_results = {'predicted_labels':hat, # predicted labels by model
@@ -133,11 +143,13 @@ def eval_model(model, dataset, use_gpu=False, show_plot=False):
 if __name__ == '__main__':
     # get arguments from command line
     args = get_args()
-    # load model and download if necessary
-    model = load_model(args.model, 
-        save_dir=args.model_dir, download=not args.no_download)
+    # load model and download if necessary (or from --weights_path if provided)
+    model = load_model(args.model,
+        save_dir=args.model_dir, download=not args.no_download,
+        weights_path=args.weights_path)
+    from ddi_dataset import test_transform
     # load DDI dataset
-    dataset = DDI_Dataset("DDI", transform=test_transform)
+    dataset = DDI_Dataset(args.data_dir, img_dirname=args.img_dir, transform=test_transform)
     # evaluate results on data
     eval_results = eval_model(model, dataset, 
         use_gpu=args.use_gpu, show_plot=args.plot)

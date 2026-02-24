@@ -5,6 +5,50 @@ For more information, please visit our project page [here](https://ddi-dataset.g
 
 Our models can be downloaded [here](https://drive.google.com/drive/folders/1oQ53WH_Tp6rcLZjRp_-UBOQcMl-b1kkP) or through the provided code.
 
+The DDI dataset is hosted on Azure. You get a **time-limited download link** (SAS URL) from the [Stanford AIMI dataset page](https://stanfordaimi.azurewebsites.net/datasets/35866158-8196-48d8-87bf-50dca81df965). That link cannot be opened directly in a browser; use one of the methods below to download the entire dataset.
+
+### Option 1: AzCopy (command line)
+
+1. **Install AzCopy**  
+   - Windows: [Download AzCopy v10](https://aka.ms/downloadazcopy-v10-windows) (zip), extract, and optionally add the folder to your PATH.  
+   - Or install via winget: `winget install Microsoft.AzCopy`
+
+2. **Download the dataset**  
+   Replace `YOUR_SAS_URL` with the full SAS URL from Stanford AIMI (the one that starts with `https://aimistanforddatasets01.blob...` and includes `?sv=...&sig=...`).  
+   Replace `DDI` with the folder where you want the data (e.g. `C:\Data\DDI`).
+
+   ```bash
+   azcopy copy "YOUR_SAS_URL" "DDI" --recursive
+   ```
+
+   Example (use your own link; this one expires):
+
+   ```bash
+   azcopy copy "https://aimistanforddatasets01.blob.core.windows.net/ddidiversedermatologyimages?sv=2019-02-02&sr=c&sig=..." "DDI" --recursive
+   ```
+
+3. **Match the expected layout**  
+   The code expects:
+   - `DDI/ddi_metadata.csv`
+   - `DDI/images/` with all `.png` files (e.g. `000001.png`, `000002.png`, ...)  
+   If the Azure container has a different structure, move the CSV and images into this layout after download.
+
+### Option 2: Azure Storage Explorer (GUI)
+
+1. **Install** [Azure Storage Explorer](https://azure.microsoft.com/products/storage/storage-explorer/).
+
+2. **Connect with the SAS URL**  
+   - Open Storage Explorer → **Connect** (plug icon) → **Blob container or directory** → **Shared access signature URL (SAS)**.  
+   - Paste the full SAS URL from Stanford AIMI → **Next** → **Connect**.
+
+3. **Download**  
+   - Open the container, select the folder or all blobs, then **Download** and choose your local folder (e.g. `DDI`).
+
+4. **Match the expected layout**  
+   Same as above: ensure `ddi_metadata.csv` and an `images/` folder with all `.png` files are under your `DDI` directory.
+
+> **Note:** The SAS link expires (often after a few weeks). If you get authentication or expiry errors, request a new download link from the Stanford AIMI dataset page.
+
 
 ## Description 
 We include code to download and load our models (`ddi_model.py`), load the DDI dataset (`ddi_dataset.py`), evaluate our models on the DDI dataset (`eval_ddi.py`) as well as evaluate our models on an arbitrary dataset  (`eval_data.py`). For `eval_ddi.py` and `eval_data.py`, we provide a command line interface with the following arguments:

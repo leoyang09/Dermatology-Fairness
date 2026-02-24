@@ -6,16 +6,58 @@ from torchvision import transforms as T
 import os
 import pandas as pd
 import numpy as np
+import cv2
+from PIL import Image
 
 means = [0.485, 0.456, 0.406]
 stds  = [0.229, 0.224, 0.225]
-test_transform = T.Compose([
-    lambda x: x.convert('RGB'),
-    T.Resize(299),
-    T.CenterCrop(299),
-    T.ToTensor(),
-    T.Normalize(mean=means, std=stds)
-])
+
+
+def clahe_on_luminance(pil_img, clip_limit=2.0, tile_grid_size=(8, 8)):
+    """Apply CLAHE to the L channel in LAB space; keep color unchanged.
+    Args:
+        pil_img: PIL Image (RGB).
+        clip_limit: CLAHE contrast limit (higher = more contrast).
+        tile_grid_size: Grid size for adaptive equalization.
+    Returns:
+        PIL Image (RGB) with contrast-enhanced luminance.
+    """
+    img = np.array(pil_img)
+    if img.ndim == 2:
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    elif img.shape[-1] == 3:
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
+    l = clahe.apply(l)
+    lab = cv2.merge([l, a, b])
+    bgr = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    return Image.fromarray(rgb)
+
+
+def build_transform(use_clahe=False, clahe_clip_limit=2.0, clahe_tile_grid_size=(8, 8)):
+    """Build the standard DDI image transform, optionally with CLAHE preprocessing."""
+    steps = [
+        lambda x: x.convert('RGB'),
+    ]
+    if use_clahe:
+        steps.append(lambda x: clahe_on_luminance(x, clip_limit=clahe_clip_limit, tile_grid_size=clahe_tile_grid_size))
+    steps.extend([
+        T.Resize(299),
+        T.CenterCrop(299),
+        T.ToTensor(),
+        T.Normalize(mean=means, std=stds),
+    ])
+    return T.Compose(steps)
+
+
+# Default transform (no CLAHE) for backward compatibility
+test_transform = build_transform(use_clahe=False)
+
+# Transform with CLAHE preprocessing (e.g. for training or ablation)
+test_transform_clahe = build_transform(use_clahe=True)
 
 
 class DDI_Dataset(ImageFolder):
@@ -37,7 +79,8 @@ class DDI_Dataset(ImageFolder):
         csv_path (str): Path to the metadata CSV file. Defaults to `{root}/ddi_metadata.csv`
         transform     : Function to transform and collate image input. (can use test_transform from this file) 
     """
-    def __init__(self, root, csv_path=None, download=True, transform=None, *args, **kwargs):
+    def __init__(self, root, img_dirname="images", csv_path=None, download=True, transform=None, *args, **kwargs):
+        self.img_dirname = img_dirname
         if csv_path is None:
             csv_path = os.path.join(root, "ddi_metadata.csv")
         if not os.path.exists(csv_path) and download:
@@ -49,12 +92,24 @@ class DDI_Dataset(ImageFolder):
         if m_key not in self.annotations:
             self.annotations[m_key] = self.annotations['malignancy(malig=1)'].apply(lambda x: x==1)
 
+    def find_classes(self, directory):
+        """Override to only find the specific image directory."""
+        path = os.path.join(directory, self.img_dirname)
+        if not os.path.isdir(path):
+            raise FileNotFoundError(f"Image directory not found: {path}")
+        return [self.img_dirname], {self.img_dirname: 0}
+
     def __getitem__(self, index):
         img, target = super(DDI_Dataset, self).__getitem__(index)
-        path = self.imgs[index][0]        
-        annotation = dict(self.annotations[self.annotations.DDI_file==path.split("/")[-1]])
-        target = int(annotation['malignant'].item()) # 1 if malignant, 0 if benign
-        skin_tone = annotation['skin_tone'].item() # Fitzpatrick- 12, 34, or 56
+        path = self.imgs[index][0]
+        # use first matching row if multiple rows share the same DDI_file (e.g. duplicate filenames)
+        filename = os.path.basename(path)
+        match = self.annotations[self.annotations.DDI_file == filename]
+        if len(match) == 0:
+            raise KeyError(f"No annotation for DDI_file: {filename}")
+        row = match.iloc[0]
+        target = int(row['malignant'])  # 1 if malignant, 0 if benign
+        skin_tone = int(row['skin_tone'])  # Fitzpatrick 12, 34, or 56
         return path, img, target, skin_tone
 
     """Return a subset of the DDI dataset based on skin tones and malignancy of lesion.

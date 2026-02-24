@@ -27,19 +27,32 @@ MODEL_THRESHOLDS = {
     'CDANN':0.980,
 }
 
-def load_model(model_name, save_dir="DDI-models", download=True):
+def load_model(model_name, save_dir="DDI-models", download=True, weights_path=None):
     """Load the model and download if necessary. Saves model to provided save 
-    directory."""
-    os.makedirs(save_dir, exist_ok=True)
-    model_path = os.path.join(save_dir, f"{model_name.lower()}.pth")
-    if not os.path.exists(model_path):
-        if not download:
-            raise Exception("Model not downloaded and download option not"\
-                            " enabled.")
-        else:
-            # Requires installation of gdown (pip install gdown)
-            import gdown
-            gdown.download(MODEL_WEB_PATHS[model_name], model_path)
+    directory.
+
+    Args:
+        model_name: One of HAM10000, DeepDerm, GroupDRO, CORAL, CDANN.
+        save_dir: Directory where weights are stored or will be downloaded.
+        download: If True and weights are missing, download from the web.
+        weights_path: Optional path to a local weights file (e.g. from Zenodo).
+                     If set, this file is used and save_dir/download are ignored.
+    """
+    if weights_path is not None:
+        model_path = os.path.abspath(weights_path)
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Weights file not found: {model_path}")
+    else:
+        os.makedirs(save_dir, exist_ok=True)
+        model_path = os.path.join(save_dir, f"{model_name.lower()}.pth")
+        if not os.path.exists(model_path):
+            if not download:
+                raise Exception("Model not downloaded and download option not"\
+                                " enabled.")
+            else:
+                # Requires installation of gdown (pip install gdown)
+                import gdown
+                gdown.download(MODEL_WEB_PATHS[model_name], model_path)
     model = torchvision.models.inception_v3(pretrained=False, transform_input=True)
     model.fc = torch.nn.Linear(2048, 2)
     model.AuxLogits.fc = torch.nn.Linear(768, 2)
