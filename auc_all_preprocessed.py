@@ -6,17 +6,25 @@ import subprocess
 # Configuration
 # -------------------------------
 preprocessed_dirs = [
-    "images_bilateral_optimized",
-    "images_bilateral+msrcr_optimized",
+    #"images_bilateral_optimized",
+    #"images_bilateral+msrcr_optimized",
+    #"images_non_local_means+msrcr_optimized",
+    #"images_bilateral+illumination_comp_optimized",
+    #"images_z_score_norm+adaptive_gamma_optimized",
+    #"images_z_score_norm+percentile_norm_optimized",
+    #"images_bilateral+z_score_norm_optimized",
+    "images_msrcr+local_contrast_optimized",
+    "images_clahe+adaptive_gamma_optimized",
     "images_non_local_means+msrcr_optimized",
-    "images_bilateral+illumination_comp_optimized",
-    "images_z_score_norm+adaptive_gamma_optimized",
-    "images_z_score_norm+percentile_norm_optimized",
-    "images_bilateral+z_score_norm_optimized",
+    "images_non_local_means+msrcr+adaptive_gamma_optimized",
+    "images_non_local_means+illumination_comp+clahe_optimized",
+    #"images_illumination_comp_optimized",
+    #"images_illumination_comp+local_contrast_optimized",
+    #"images_illumination_comp+adaptive_gamma_optimized"
 ]
 
-models = ["HAM10000"]
-# , "DeepDerm"
+models = ["DeepDerm"]
+# , "HAM10000"
 eval_base_dir = "DDI-results"
 meta_file = "DDI/ddi_metadata.csv"
 

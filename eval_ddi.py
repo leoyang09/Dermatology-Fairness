@@ -65,6 +65,10 @@ def get_args():
         help="Set to use GPU for evaluation.")
     parser.add_argument('--plot', action='store_true', default=False,
         help="Set to show ROC plot.")
+    parser.add_argument('--shap', action='store_true', default=False,
+        help="Run SHAP explanations on a subset of images.")
+    parser.add_argument('--shap_samples', type=int, default=20,
+        help="Number of images to explain with SHAP (default=20).")    
     args = parser.parse_args()
     return args
 
@@ -153,7 +157,6 @@ if __name__ == '__main__':
     # evaluate results on data
     eval_results = eval_model(model, dataset, 
         use_gpu=args.use_gpu, show_plot=args.plot)
-
     # save evaluation results in a .pkl file 
     if args.eval_dir:
         os.makedirs(args.eval_dir, exist_ok=True)

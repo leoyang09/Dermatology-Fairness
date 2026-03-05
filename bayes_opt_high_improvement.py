@@ -42,27 +42,30 @@ preprocessing_methods = {
 # -------------------------------
 high_impact_combos = [
     # Single methods
-    # "illumination_comp",
+     #"illumination_comp",
     # "percentile_norm",
     # "local_contrast",
     # "bilateral",
     # "clahe",
 
     # Combinations — use + as separator
-    # "illumination_comp+local_contrast",
-    # "illumination_comp+adaptive_gamma",
+     #"illumination_comp+local_contrast",
+    #"illumination_comp+adaptive_gamma",
+
     # "illumination_comp+clahe",
-    # "clahe+adaptive_gamma",
+
     # "non_local_means+illumination_comp",
-     "bilateral+msrcr",
+    # "bilateral+msrcr",
+        "msrcr+local_contrast",
+         "clahe+adaptive_gamma",
      "non_local_means+msrcr",
-     "bilateral+illumination_comp",
-     "z_score_norm+adaptive_gamma",
-     "z_score_norm+percentile_norm",
-     "bilateral+z_score_norm",
-     "bilateral+msrcr+z_score_norm",
-    # "non_local_means+msrcr+adaptive_gamma",
-    # "non_local_means+illumination_comp+clahe",
+          "non_local_means+msrcr+adaptive_gamma",
+     "non_local_means+illumination_comp+clahe",
+    # "bilateral+illumination_comp",
+    # "Z_score_norm+percentile_norm",
+    # "bilateral+Z_score_norm",
+    # "bilateral+msrcr+Z_score_norm",
+
     # "non_local_means+illumination_comp+percentile_norm",
 ]
 
@@ -208,7 +211,7 @@ def make_objective(combo, model):
         shutil.rmtree(tmp_dir)
 
         gap     = auc_12 - auc_56
-        penalty = max(0, 0.54 - overall_auc) * 2
+        penalty = max(0, 0.50 - overall_auc) * 2
 
         print(f"  params={trial_params}, auc_12={auc_12:.4f}, auc_56={auc_56:.4f}, "
               f"overall={overall_auc:.4f}, gap={gap:.4f}")
@@ -222,7 +225,7 @@ def make_objective(combo, model):
 # Run Bayesian Optimization
 # -------------------------------
 if __name__ == "__main__":
-    model_name   = "HAM10000"  # or "DeepDerm"
+    model_name   = "DeepDerm"  # or "DeepDerm"
     weights_path = f"DDI-models/{model_name.lower()}.pth"
     results      = []
 
@@ -237,6 +240,17 @@ if __name__ == "__main__":
         print(f"Best gap: {study.best_value:.4f}")
         results.append({"combo": combo, "best_params": study.best_params, "best_gap": study.best_value})
 
+        # Save best params for this combo to CSV immediately after optimization
+        csv_out_path = "optimization_results.csv"
+        row = {"combo": combo, "best_gap": study.best_value}
+        row.update(study.best_params)
+        row_df = pd.DataFrame([row])
+        if os.path.exists(csv_out_path):
+            row_df.to_csv(csv_out_path, mode="a", header=False, index=False)
+        else:
+            row_df.to_csv(csv_out_path, mode="w", header=True, index=False)
+        print(f"Best params appended to {csv_out_path}")
+        
         # Save optimized images to disk
         print("Saving optimized images...")
         best_params = study.best_params
