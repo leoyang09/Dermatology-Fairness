@@ -1,2 +1,4 @@
 model,preprocessing,ROC_AUC,F1,Balanced_Acc
-DeepDerm,images,0.5954422137818773,0.40332640332640335,0.5640381021281726
+HAM10000,images_msrcr+local_contrast_optimized,0.625803339965033,0.011560693641618497,0.5018930487731356
+HAM10000,images_illumination_comp+adaptive_gamma_optimized,0.6311448724905047,0.1116751269035533,0.5166998251642853
+HAM10000,images_non_local_means+msrcr+adaptive_gamma_optimized,0.5949840236329655,0.0,0.5

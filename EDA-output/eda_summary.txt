@@ -1,0 +1,31 @@
+============================================================
+CLASS BALANCE (Diagnosis)
+============================================================
+  Total samples:     656
+  Benign (0):             0  ( 0.00%)
+  Malignant (1):          0  ( 0.00%)
+  Imbalance ratio:   0.00 (max/min class size)
+
+
+============================================================
+SKIN TONE DISTRIBUTION
+============================================================
+  Total samples:     656
+  Fitzpatrick 1-2         208  (31.71%)
+  Fitzpatrick 3-4         241  (36.74%)
+  Fitzpatrick 5-6         207  (31.55%)
+
+
+============================================================
+CROSS-TAB: Diagnosis × Skin tone (counts)
+============================================================
+           Fitzpatrick 1-2  Fitzpatrick 3-4  Fitzpatrick 5-6  All
+Benign                 159              167              159  485
+Malignant               49               74               48  171
+Total                  208              241              207  656
+
+Proportion within each skin tone (%):
+                 Benign %  Malignant %
+Fitzpatrick 1-2     76.44        23.56
+Fitzpatrick 3-4     69.29        30.71
+Fitzpatrick 5-6     76.81        23.19
