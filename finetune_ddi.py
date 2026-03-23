@@ -26,29 +26,39 @@ DATA_DIR = "DDI"
 # ---------------------------------------------------
 # Data transforms
 # ---------------------------------------------------
+class RandomRotateCrop:
+    """
+    Rotate image and crop to largest possible rectangle (approximation).
+    torchvision doesn't provide exact largest-inscribed-rectangle,
+    so we use expand=False to keep dimensions and avoid black borders.
+    """
+    def __init__(self, degrees):
+        self.degrees = degrees
+
+    def __call__(self, img):
+        angle = random.uniform(-self.degrees, self.degrees)
+        return transforms.functional.rotate(img, angle, expand=False)
 
 train_tf = transforms.Compose([
 
-    transforms.RandomRotation(180),
+    RandomRotateCrop(degrees=30),
+    transforms.RandomVerticalFlip(p=0.5),
 
-    transforms.RandomHorizontalFlip(0.5),
-
-    transforms.RandomVerticalFlip(0.5),
+    transforms.Resize(299),
+    transforms.CenterCrop(299),
 
     transforms.ColorJitter(
-        brightness=0.2,
-        contrast=0.2,
-        saturation=0.2
+        brightness=0.1,
+        contrast=0.1,
+        saturation=0.1
     ),
 
     transforms.GaussianBlur(
-        kernel_size=3,
-        sigma=(0.1,2.0)
+        kernel_size=(5, 9),
+        sigma=(0.1, 5)
     ),
 
-    transforms.Resize((299,299)),
     transforms.ToTensor(),
-
     transforms.Normalize(
         mean=[0.485,0.456,0.406],
         std=[0.229,0.224,0.225]
@@ -234,7 +244,8 @@ def train_model(seed, model_name):
         val_loss = 0
         with torch.no_grad():
             for x, y, _ in val_loader:
-                x, y = x.to(DEVICE), y.to(DEVICE)
+                x = x.to(DEVICE)
+                y = torch.tensor(y, dtype=torch.long, device=DEVICE)
                 out = model(x)
                 if isinstance(out, tuple):
                     out = out[0]

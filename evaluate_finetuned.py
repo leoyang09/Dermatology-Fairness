@@ -1,182 +1,148 @@
 import os
+import pickle
 import torch
-import torchvision
-from torchvision import transforms, datasets
-from collections import defaultdict
 import numpy as np
 import pandas as pd
-from sklearn.metrics import roc_auc_score, classification_report, roc_curve, auc
-import matplotlib.pyplot as plt
-import tqdm
+from sklearn.metrics import roc_curve, auc, classification_report
+from torchvision import transforms
+from PIL import Image
+from eval_data import load_model  # your existing load_model
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def _normalize_tone_value(tone):
+    if isinstance(tone, torch.Tensor):
+        return int(tone.item())
+    return tone
 
 # ---------------------------
-# CONFIG
+# Dataset for test CSV
 # ---------------------------
+class DDITestDataset(torch.utils.data.Dataset):
+    def __init__(self, csv_file, data_dir, transform=None):
+        self.df = pd.read_csv(csv_file)
+        self.data_dir = data_dir
+        self.transform = transform
 
-MODEL_DIR = "DDI-finetuned-models"           # folder containing DeepDerm_seed{0-4}.pth
-DATA_DIR = "DDI"                             # folder containing images
-METADATA_CSV = "DDI/ddi_dataset/metadata.csv" # metadata CSV with skin_tone
-TEST_CSV = "DDI/ddi_dataset/test.csv"
+    def __len__(self):
+        return len(self.df)
 
-NUM_SEEDS = 5
-THRESHOLD = 0.687
+    def __getitem__(self, idx):
+        row = self.df.iloc[idx]
+        img_path = os.path.join(self.data_dir, row["DDI_file"])
+        image = Image.open(img_path).convert("RGB")
+        if self.transform is not None:
+            image = self.transform(image)
+        label = int(row["malignant"])
+        return image, label, img_path, row["skin_tone"]
 
 # ---------------------------
-# HELPERS
+# Evaluation
 # ---------------------------
+def eval_model_on_csv(model, csv_file, data_dir):
+    model.to(DEVICE).eval()
+    transform = transforms.Compose([
+        transforms.Resize(299),
+        transforms.CenterCrop(299),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                             std=[0.229, 0.224, 0.225])
+    ])
 
-def load_skin_tone_map(csv_path):
-    """Return dict mapping image filename -> skin tone"""
-    df = pd.read_csv(csv_path)
-    mapping = {}
-    for _, row in df.iterrows():
-        filename = os.path.basename(row["DDI_file"])
-        mapping[filename] = row["skin_tone"]
-    return mapping
+    dataset = DDITestDataset(csv_file, data_dir, transform)
+    loader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=False)
 
-def load_test_image_set(csv_path):
-    """Return a set of filenames listed in the test CSV"""
-    df = pd.read_csv(csv_path)
-    test_filenames = set(os.path.basename(f) for f in df["DDI_file"])
-    return test_filenames
+    preds, labels, paths, tones = [], [], [], []
 
+    with torch.no_grad():
+        for x, y, p, t in loader:
+            x = x.to(DEVICE)
+            out = model(x)
+            if isinstance(out, tuple):
+                out = out[0]  # handle Inception aux output
+            prob = torch.softmax(out, dim=1)[:, 1]
+            preds.extend(prob.cpu().numpy())
+            labels.extend(y.numpy())
+            paths.extend(p)
+            tones.extend([_normalize_tone_value(v) for v in t])
 
-class ImageFolderWithPaths(datasets.ImageFolder):
-    """Custom dataset returning (image, label, path)"""
-    def __getitem__(self, index):
-        original_tuple = super().__getitem__(index)
-        path = os.path.abspath(self.imgs[index][0])
-        return original_tuple + (path,)
+    preds = np.array(preds)
+    labels = np.array(labels)
+    fpr, tpr, _ = roc_curve(labels, preds)
+    auc_score = auc(fpr, tpr)
 
-
-def eval_model(model, image_dir, use_gpu=False, show_plot=False):
-    """Evaluate a model on the image_dir, returns dict with predictions, true labels, paths, report, ROC AUC."""
-    device = torch.device("cuda") if (use_gpu and torch.cuda.is_available()) else torch.device("cpu")
-
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
-    dataset = ImageFolderWithPaths(
-        image_dir,
-        transforms.Compose([
-            transforms.Resize(299),
-            transforms.CenterCrop(299),
-            transforms.ToTensor(),
-            normalize
-        ])
-    )
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=False, num_workers=0, pin_memory=use_gpu)
-
-    model.to(device).eval()
-
-    hat, star, all_paths = [], [], []
-    for i, (images, target, paths) in enumerate(tqdm.tqdm(dataloader)):
-        images = images.to(device)
-        target = target.to(device)
-
-        with torch.no_grad():
-            output = model(images)
-
-        hat.append(output[:,1].detach().cpu().numpy())
-        star.append(target.cpu().numpy())
-        all_paths.append(paths)
-
-    hat = np.concatenate(hat)
-    star = np.concatenate(star)
-    all_paths = np.concatenate(all_paths)
-
-    threshold = getattr(model, "_ddi_threshold", THRESHOLD)
-    m_name = getattr(model, "_ddi_name", "DeepDerm")
-
-    fpr, tpr, _ = roc_curve(star, hat, pos_label=1)
-    auc_est = auc(fpr, tpr)
-    report = classification_report(star, (hat>threshold).astype(int), target_names=["benign","malignant"])
-
-    if show_plot:
-        plt.plot(fpr, tpr, color="blue", linestyle="-", linewidth=2, marker="o", markersize=2, label=f"AUC={auc_est:.3f}")
-        plt.show()
-        plt.close()
-
-    eval_results = {
-        "predicted_labels": hat,
-        "true_labels": star,
-        "images": all_paths,
-        "report": report,
-        "ROC_AUC": auc_est,
-        "threshold": threshold,
-        "model": m_name,
-    }
-    return eval_results
-
-
-def compute_auc_per_skin_tone(results, skin_tone_map):
-    """Return dict of skin_tone -> ROC AUC for this model"""
-    hat = results["predicted_labels"]
-    star = results["true_labels"]
-    paths = results["images"]
-
-    tone_to_preds = defaultdict(list)
-    tone_to_labels = defaultdict(list)
-
-    for pred, label, path in zip(hat, star, paths):
-        filename = os.path.basename(path)
-        if filename not in skin_tone_map:
-            continue
-        tone = skin_tone_map[filename]
-        tone_to_preds[tone].append(pred)
-        tone_to_labels[tone].append(label)
-
+    # Per-skin-tone ROC-AUC (only valid when both classes exist for that tone)
     tone_auc = {}
-    for tone in tone_to_preds:
-        try:
-            tone_auc[tone] = roc_auc_score(tone_to_labels[tone], tone_to_preds[tone])
-        except ValueError:
-            tone_auc[tone] = np.nan
-    return tone_auc
+    unique_tones = sorted(set(tones))
+    for tone in unique_tones:
+        tone_mask = np.array([t == tone for t in tones], dtype=bool)
+        tone_labels = labels[tone_mask]
+        tone_preds = preds[tone_mask]
+
+        if len(np.unique(tone_labels)) < 2:
+            tone_auc[str(tone)] = None
+            continue
+
+        tone_fpr, tone_tpr, _ = roc_curve(tone_labels, tone_preds)
+        tone_auc[str(tone)] = auc(tone_fpr, tone_tpr)
+
+    report = classification_report(labels, (preds > model._ddi_threshold).astype(int),
+                                   target_names=["benign", "malignant"])
+
+    results = {
+        "predicted_labels": preds,
+        "true_labels": labels,
+        "images": paths,
+        "skin_tones": tones,
+        "ROC_AUC": auc_score,
+        "ROC_AUC_by_skin_tone": tone_auc,
+        "report": report,
+        "threshold": model._ddi_threshold,
+        "model": model._ddi_name,
+    }
+
+    return results
+
+# ---------------------------
+# Load fine-tuned weights per seed
+# ---------------------------
+def load_seed_model(model_name, seed, model_dir="."):
+    base_model = load_model(model_name, download=False)
+    weights_path = os.path.join(model_dir, f"{model_name}_seed{seed}.pth")
+    if not os.path.exists(weights_path):
+        raise FileNotFoundError(f"Missing weights: {weights_path}")
+    state_dict = torch.load(weights_path, map_location=DEVICE)
+    base_model.load_state_dict(state_dict)
+    base_model._ddi_name = f"{model_name}_seed{seed}"
+    return base_model
 
 # ---------------------------
 # MAIN
 # ---------------------------
-
-def main():
-    skin_tone_map = load_skin_tone_map(METADATA_CSV)
-    test_filenames = load_test_image_set(TEST_CSV)
-    all_seed_results = []
-
-    for seed in range(NUM_SEEDS):
-        print(f"\n=== Evaluating seed {seed} ===")
-
-        # Load model architecture
-        model = torchvision.models.inception_v3(pretrained=False, transform_input=True)
-        model.fc = torch.nn.Linear(2048,2)
-        model.AuxLogits.fc = torch.nn.Linear(768,2)
-
-        # Load weights
-        weights_path = os.path.join(MODEL_DIR, f"DeepDerm_seed{seed}.pth")
-        weights = torch.load(weights_path)
-        model.load_state_dict(weights)
-        model._ddi_threshold = THRESHOLD
-        model._ddi_name = f"DeepDerm_seed{seed}"
-
-        # Evaluate
-        results = eval_model(model, DATA_DIR)
-        print(f"Seed {seed} overall ROC AUC: {results['ROC_AUC']:.4f}")
-
-        # Compute per-skin-tone AUC
-        tone_auc = compute_auc_per_skin_tone(results, skin_tone_map)
-        all_seed_results.append(tone_auc)
-        print(f"Seed {seed} per-skin-tone AUC: {tone_auc}")
-
-    # Average across seeds
-    avg_auc = defaultdict(list)
-    for seed_result in all_seed_results:
-        for tone, auc_val in seed_result.items():
-            if not np.isnan(auc_val):
-                avg_auc[tone].append(auc_val)
-
-    avg_auc = {tone: np.mean(vals) for tone, vals in avg_auc.items()}
-    print("\n=== Average AUC per skin tone across seeds ===")
-    for tone, val in avg_auc.items():
-        print(f"{tone}: {val:.4f}")
-
 if __name__ == "__main__":
-    main()
+    TEST_CSV = "test.csv"
+    DATA_DIR = "DDI/images"
+    WEIGHTS_DIR = "baseline_finetuned_models"
+    EVAL_DIR = "DDI-results/baseline_finetuned_models"
+    os.makedirs(EVAL_DIR, exist_ok=True)
+
+    MODEL_NAMES = ["DeepDerm", "HAM10000"]
+    NUM_SEEDS = 5
+
+    for model_name in MODEL_NAMES:
+        for seed in range(NUM_SEEDS):
+            print(f"Evaluating {model_name} seed {seed}...")
+            try:
+                model = load_seed_model(model_name, seed, model_dir=WEIGHTS_DIR)
+            except FileNotFoundError as e:
+                print(e)
+                continue
+
+            results = eval_model_on_csv(model, TEST_CSV, DATA_DIR)
+
+            save_path = os.path.join(EVAL_DIR, f"{model_name}_seed{seed}-evaluation.pkl")
+            with open(save_path, "wb") as f:
+                pickle.dump(results, f)
+
+            print(f"Done. AUC: {results['ROC_AUC']:.4f}. Saved to {save_path}")
