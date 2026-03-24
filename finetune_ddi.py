@@ -1,3 +1,4 @@
+import random
 import torch
 import torchvision
 import numpy as np
@@ -16,7 +17,6 @@ BATCH_SIZE = 16
 LR = 0.05
 WEIGHT_DECAY = 1e-4
 MAX_EPOCHS = 500
-PATIENCE = 20
 
 SEEDS = [0,1,2,3,4]
 
@@ -206,7 +206,71 @@ def evaluate(model,loader):
 
 
 # ---------------------------------------------------
-# Early stopping using validation loss
+# Bootstrap confidence intervals
+# ---------------------------------------------------
+def bootstrap_auc_ci(y_true, y_score, n_boot=1000, alpha=0.95, seed=42):
+    y_true = np.asarray(y_true)
+    y_score = np.asarray(y_score)
+    if len(np.unique(y_true)) < 2:
+        return None
+
+    rng = np.random.default_rng(seed)
+    aucs = []
+    n = len(y_true)
+    for _ in range(n_boot):
+        idx = rng.integers(0, n, n)
+        y_b = y_true[idx]
+        if len(np.unique(y_b)) < 2:
+            continue
+        aucs.append(roc_auc_score(y_b, y_score[idx]))
+    if not aucs:
+        return None
+    lo = (1 - alpha) / 2
+    hi = 1 - lo
+    return float(np.quantile(aucs, lo)), float(np.quantile(aucs, hi))
+
+
+def baseline_evaluation(model, test_loader, model_name, seed):
+    preds, labels, tones = evaluate(model, test_loader)
+    overall_auc = roc_auc_score(labels, preds)
+    overall_ci = bootstrap_auc_ci(labels, preds, seed=seed)
+
+    print("\n" + "=" * 60)
+    print(f"BASELINE EVALUATION BEFORE FINE-TUNING: {model_name} seed={seed}")
+    print(f"Overall AUC: {overall_auc:.4f}", end="")
+    if overall_ci is not None:
+        print(f" (95% CI: {overall_ci[0]:.4f}, {overall_ci[1]:.4f})")
+    else:
+        print(" (95% CI: N/A)")
+
+    tones_arr = np.asarray(tones)
+    for tone in [12, 34, 56]:
+        mask = tones_arr == tone
+        y_tone = labels[mask]
+        p_tone = preds[mask]
+        if len(y_tone) == 0 or len(np.unique(y_tone)) < 2:
+            print(f"FST {tone} AUC: N/A (insufficient class diversity)")
+            continue
+        tone_auc = roc_auc_score(y_tone, p_tone)
+        tone_ci = bootstrap_auc_ci(y_tone, p_tone, seed=seed)
+        if tone_ci is not None:
+            print(
+                f"FST {tone} AUC: {tone_auc:.4f} "
+                f"(95% CI: {tone_ci[0]:.4f}, {tone_ci[1]:.4f}; n={mask.sum()})"
+            )
+        else:
+            print(f"FST {tone} AUC: {tone_auc:.4f} (95% CI: N/A; n={mask.sum()})")
+    print("=" * 60 + "\n")
+
+    if overall_auc < 0.55:
+        print(
+            "WARNING: Baseline AUC is very low; confirm you are loading the paper's "
+            "Zenodo checkpoints."
+        )
+
+
+# ---------------------------------------------------
+# Training: best checkpoint by validation loss (full MAX_EPOCHS)
 # ---------------------------------------------------
 
 def train_model(seed, model_name):
@@ -219,9 +283,13 @@ def train_model(seed, model_name):
 
     train_ds = DDIDataset("train.csv", train_tf)
     val_ds = DDIDataset("val.csv", val_tf)
+    test_ds = DDIDataset("test.csv", val_tf)
 
     train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE)
+    test_loader = DataLoader(test_ds, batch_size=BATCH_SIZE)
+
+    baseline_evaluation(model, test_loader, model_name=model_name, seed=seed)
 
     optimizer = torch.optim.Adam(
         model.parameters(),
@@ -231,42 +299,46 @@ def train_model(seed, model_name):
 
     criterion = torch.nn.CrossEntropyLoss()
 
-    best_val_loss = float("inf")  # track minimum validation loss
-    patience_counter = 0
+    best_val_loss = float("inf")  # track minimum validation loss (checkpoint selection)
 
     for epoch in range(MAX_EPOCHS):
 
         # Train one epoch
         train_epoch(model, train_loader, optimizer, criterion)
 
-        # Validation
+        # Validation: loss + AUC (single pass)
         model.eval()
-        val_loss = 0
+        val_loss = 0.0
+        val_preds = []
+        val_labels = []
         with torch.no_grad():
             for x, y, _ in val_loader:
                 x = x.to(DEVICE)
-                y = torch.tensor(y, dtype=torch.long, device=DEVICE)
+                y = y.to(DEVICE, dtype=torch.long)
                 out = model(x)
                 if isinstance(out, tuple):
                     out = out[0]
                 loss = criterion(out, y)
                 val_loss += loss.item()
+                prob = torch.softmax(out, dim=1)[:, 1]
+                val_preds.extend(prob.cpu().numpy())
+                val_labels.extend(y.cpu().numpy())
         val_loss /= len(val_loader)
+        val_preds = np.asarray(val_preds)
+        val_labels = np.asarray(val_labels)
+        if len(np.unique(val_labels)) >= 2:
+            val_auc = roc_auc_score(val_labels, val_preds)
+        else:
+            val_auc = float("nan")
 
-        print(seed, epoch, val_loss)
+        print(
+            f"seed={seed} epoch={epoch} val_loss={val_loss:.6f} val_auc={val_auc:.4f} "
+            f"(best_val_loss={best_val_loss:.6f})"
+        )
 
-        # Check for improvement
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            patience_counter = 0
-            # Save best model based on val loss
             torch.save(model.state_dict(), f"{model_name}_seed{seed}.pth")
-        else:
-            patience_counter += 1
-
-        if patience_counter > PATIENCE:
-            print(f"Early stopping at epoch {epoch} for seed {seed}")
-            break
 
 
 # ---------------------------------------------------

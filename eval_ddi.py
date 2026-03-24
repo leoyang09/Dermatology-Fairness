@@ -43,6 +43,27 @@ from sklearn.metrics import (f1_score, balanced_accuracy_score,
 import torch
 import tqdm
 
+def bootstrap_auc_ci(y_true, y_score, n_boot=1000, alpha=0.95, seed=42):
+    y_true = np.asarray(y_true)
+    y_score = np.asarray(y_score)
+    if len(np.unique(y_true)) < 2:
+        return None
+    rng = np.random.default_rng(seed)
+    aucs = []
+    n = len(y_true)
+    for _ in range(n_boot):
+        idx = rng.integers(0, n, n)
+        y_b = y_true[idx]
+        if len(np.unique(y_b)) < 2:
+            continue
+        fpr_b, tpr_b, _ = roc_curve(y_b, y_score[idx], pos_label=1, drop_intermediate=True)
+        aucs.append(auc(fpr_b, tpr_b))
+    if not aucs:
+        return None
+    lo = (1 - alpha) / 2
+    hi = 1 - lo
+    return float(np.quantile(aucs, lo)), float(np.quantile(aucs, hi))
+
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -100,7 +121,10 @@ def eval_model(model, dataset, use_gpu=False, show_plot=False, num_workers=0):
         with torch.no_grad():
             output = model(images)
 
-        hat.append(output[:,1].detach().cpu().numpy())
+        if isinstance(output, tuple):
+            output = output[0]
+        probs = torch.softmax(output, dim=1)[:, 1]
+        hat.append(probs.detach().cpu().numpy())
         star.append(target.cpu().numpy())
         all_paths.append(paths)
 
@@ -117,6 +141,7 @@ def eval_model(model, dataset, use_gpu=False, show_plot=False, num_workers=0):
                                 sample_weight=None,
                                 drop_intermediate=True)
     auc_est = auc(fpr, tpr)
+    auc_ci = bootstrap_auc_ci(star, hat)
 
     if show_plot:
         _=plt.plot(fpr, tpr, 
@@ -134,6 +159,7 @@ def eval_model(model, dataset, use_gpu=False, show_plot=False, num_workers=0):
                     'images':all_paths,     # image paths
                     'report':report,        # sklearn classification report
                     'ROC_AUC':auc_est,      # ROC-AUC
+                    'ROC_AUC_95CI':auc_ci,  # 95% bootstrap CI
                     'threshold':threshold,  # >= threshold ==> malignant
                     'model':m_name,         # model name
                     'web_path':m_web_path,  # web link to download model

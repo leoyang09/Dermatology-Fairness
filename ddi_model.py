@@ -2,13 +2,14 @@
 import os
 import torch
 import torchvision
+import urllib.request
 
 
 # google drive paths to our models
 MODEL_WEB_PATHS = {
 # base form of models trained on skin data
-'HAM10000':'https://drive.google.com/uc?id=1ToT8ifJ5lcWh8Ix19ifWlMcMz9UZXcmo',
-'DeepDerm':'https://drive.google.com/uc?id=1OLt11htu9bMPgsE33vZuDiU5Xe4UqKVJ',
+'HAM10000':'https://zenodo.org/record/6784279/files/HAM10000.pth',
+'DeepDerm':'https://zenodo.org/record/6784279/files/DeepDerm.pth',
 
 # robust training algorithms
 'GroupDRO':'https://drive.google.com/uc?id=193ippDUYpMaOaEyLjd1DNsOiW0aRXL75',
@@ -50,9 +51,13 @@ def load_model(model_name, save_dir="DDI-models", download=True, weights_path=No
                 raise Exception("Model not downloaded and download option not"\
                                 " enabled.")
             else:
-                # Requires installation of gdown (pip install gdown)
-                import gdown
-                gdown.download(MODEL_WEB_PATHS[model_name], model_path)
+                url = MODEL_WEB_PATHS[model_name]
+                if "drive.google.com" in url:
+                    # Requires installation of gdown (pip install gdown)
+                    import gdown
+                    gdown.download(url, model_path)
+                else:
+                    urllib.request.urlretrieve(url, model_path)
     model = torchvision.models.inception_v3(pretrained=False, transform_input=True)
     model.fc = torch.nn.Linear(2048, 2)
     model.AuxLogits.fc = torch.nn.Linear(768, 2)

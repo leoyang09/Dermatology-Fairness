@@ -16,6 +16,27 @@ def _normalize_tone_value(tone):
         return int(tone.item())
     return tone
 
+def bootstrap_auc_ci(y_true, y_score, n_boot=1000, alpha=0.95, seed=42):
+    y_true = np.asarray(y_true)
+    y_score = np.asarray(y_score)
+    if len(np.unique(y_true)) < 2:
+        return None
+    rng = np.random.default_rng(seed)
+    aucs = []
+    n = len(y_true)
+    for _ in range(n_boot):
+        idx = rng.integers(0, n, n)
+        y_b = y_true[idx]
+        if len(np.unique(y_b)) < 2:
+            continue
+        fpr_b, tpr_b, _ = roc_curve(y_b, y_score[idx])
+        aucs.append(auc(fpr_b, tpr_b))
+    if not aucs:
+        return None
+    lo = (1 - alpha) / 2
+    hi = 1 - lo
+    return float(np.quantile(aucs, lo)), float(np.quantile(aucs, hi))
+
 # ---------------------------
 # Dataset for test CSV
 # ---------------------------
@@ -71,9 +92,11 @@ def eval_model_on_csv(model, csv_file, data_dir):
     labels = np.array(labels)
     fpr, tpr, _ = roc_curve(labels, preds)
     auc_score = auc(fpr, tpr)
+    auc_ci = bootstrap_auc_ci(labels, preds)
 
     # Per-skin-tone ROC-AUC (only valid when both classes exist for that tone)
     tone_auc = {}
+    tone_auc_ci = {}
     unique_tones = sorted(set(tones))
     for tone in unique_tones:
         tone_mask = np.array([t == tone for t in tones], dtype=bool)
@@ -82,10 +105,12 @@ def eval_model_on_csv(model, csv_file, data_dir):
 
         if len(np.unique(tone_labels)) < 2:
             tone_auc[str(tone)] = None
+            tone_auc_ci[str(tone)] = None
             continue
 
         tone_fpr, tone_tpr, _ = roc_curve(tone_labels, tone_preds)
         tone_auc[str(tone)] = auc(tone_fpr, tone_tpr)
+        tone_auc_ci[str(tone)] = bootstrap_auc_ci(tone_labels, tone_preds)
 
     report = classification_report(labels, (preds > model._ddi_threshold).astype(int),
                                    target_names=["benign", "malignant"])
@@ -96,7 +121,9 @@ def eval_model_on_csv(model, csv_file, data_dir):
         "images": paths,
         "skin_tones": tones,
         "ROC_AUC": auc_score,
+        "ROC_AUC_95CI": auc_ci,
         "ROC_AUC_by_skin_tone": tone_auc,
+        "ROC_AUC_by_skin_tone_95CI": tone_auc_ci,
         "report": report,
         "threshold": model._ddi_threshold,
         "model": model._ddi_name,
@@ -123,7 +150,7 @@ def load_seed_model(model_name, seed, model_dir="."):
 if __name__ == "__main__":
     TEST_CSV = "test.csv"
     DATA_DIR = "DDI/images"
-    WEIGHTS_DIR = "baseline_finetuned_models"
+    WEIGHTS_DIR = "."
     EVAL_DIR = "DDI-results/baseline_finetuned_models"
     os.makedirs(EVAL_DIR, exist_ok=True)
 

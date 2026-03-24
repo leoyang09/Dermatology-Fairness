@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 import pickle
+import urllib.request
 from sklearn.metrics import (f1_score, balanced_accuracy_score, 
     classification_report, confusion_matrix, roc_curve, auc)
 import torch
@@ -29,8 +30,8 @@ import tqdm
 
 # google drive paths to models
 MODEL_WEB_PATHS = {
-'HAM10000':'https://drive.google.com/uc?id=1ToT8ifJ5lcWh8Ix19ifWlMcMz9UZXcmo',
-'DeepDerm':'https://drive.google.com/uc?id=1OLt11htu9bMPgsE33vZuDiU5Xe4UqKVJ',
+'HAM10000':'https://zenodo.org/record/6784279/files/HAM10000.pth',
+'DeepDerm':'https://zenodo.org/record/6784279/files/DeepDerm.pth',
 # robust training algorithms
 'GroupDRO':'https://drive.google.com/uc?id=193ippDUYpMaOaEyLjd1DNsOiW0aRXL75',
 'CORAL':   'https://drive.google.com/uc?id=18rMU0nRd4LiHN9WkXoDROJ2o2sG1_GD8',
@@ -82,9 +83,13 @@ def load_model(model_name, save_dir="DDI-models", download=True):
             raise Exception("Model not downloaded and download option not"\
                             " enabled.")
         else:
-            # Requires installation of gdown (pip install gdown)
-            import gdown
-            gdown.download(MODEL_WEB_PATHS[model_name], model_path)
+            url = MODEL_WEB_PATHS[model_name]
+            if "drive.google.com" in url:
+                # Requires installation of gdown (pip install gdown)
+                import gdown
+                gdown.download(url, model_path)
+            else:
+                urllib.request.urlretrieve(url, model_path)
     model = torchvision.models.inception_v3(init_weights=False, pretrained=False, transform_input=True)
     model.fc = torch.nn.Linear(2048, 2)
     model.AuxLogits.fc = torch.nn.Linear(768, 2)
@@ -147,7 +152,10 @@ def eval_model(model, image_dir, use_gpu=False, show_plot=False):
         with torch.no_grad():
             output = model(images)
 
-        hat.append(output[:,1].detach().cpu().numpy())
+        if isinstance(output, tuple):
+            output = output[0]
+        probs = torch.softmax(output, dim=1)[:, 1]
+        hat.append(probs.detach().cpu().numpy())
         star.append(target.cpu().numpy())
         all_paths.append(paths)
 
@@ -164,6 +172,7 @@ def eval_model(model, image_dir, use_gpu=False, show_plot=False):
                                 sample_weight=None,
                                 drop_intermediate=True)
     auc_est = auc(fpr, tpr)
+    auc_ci = bootstrap_auc_ci(star, hat)
 
     if show_plot:
         _=plt.plot(fpr, tpr, 
@@ -178,12 +187,35 @@ def eval_model(model, image_dir, use_gpu=False, show_plot=False):
                     'images':all_paths,     # image paths
                     'report':report,        # sklearn classification report
                     'ROC_AUC':auc_est,      # ROC-AUC
+                    'ROC_AUC_95CI':auc_ci,  # 95% bootstrap CI
                     'threshold':threshold,  # >= threshold ==> malignant
                     'model':m_name,         # model name
                     'web_path':m_web_path,  # web link to download model
                     }
 
     return eval_results
+
+
+def bootstrap_auc_ci(y_true, y_score, n_boot=1000, alpha=0.95, seed=42):
+    y_true = np.asarray(y_true)
+    y_score = np.asarray(y_score)
+    if len(np.unique(y_true)) < 2:
+        return None
+    rng = np.random.default_rng(seed)
+    aucs = []
+    n = len(y_true)
+    for _ in range(n_boot):
+        idx = rng.integers(0, n, n)
+        y_b = y_true[idx]
+        if len(np.unique(y_b)) < 2:
+            continue
+        fpr_b, tpr_b, _ = roc_curve(y_b, y_score[idx], pos_label=1, drop_intermediate=True)
+        aucs.append(auc(fpr_b, tpr_b))
+    if not aucs:
+        return None
+    lo = (1 - alpha) / 2
+    hi = 1 - lo
+    return float(np.quantile(aucs, lo)), float(np.quantile(aucs, hi))
 
 
 
