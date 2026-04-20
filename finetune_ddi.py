@@ -383,6 +383,8 @@ def train_model(seed, model_name, fold):
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             patience_counter = 0
+            # Save best model based on val loss
+            torch.save(model.state_dict(), f"{model_name}_seed{seed}.pth")
         else:
             patience_counter += 1
         if patience_counter > PATIENCE:
