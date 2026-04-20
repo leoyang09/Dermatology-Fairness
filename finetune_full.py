@@ -9,7 +9,9 @@ from torch.utils.data import Dataset, DataLoader
 from PIL import Image
 import os
 from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import StratifiedKFold
 from eval_data import load_model
+import heapq
 
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -18,9 +20,10 @@ BATCH_SIZE = 16
 LR = 1e-5
 WEIGHT_DECAY = 1e-4
 MAX_EPOCHS = 500
-PATIENCE = 20
+TOP_K = 20
 
 SEEDS = [0,1,2,3,4]
+N_FOLDS = 5
 
 DATA_DIR = "DDI"
 
@@ -85,8 +88,13 @@ val_tf = transforms.Compose([
 # ---------------------------------------------------
 
 class DDIDataset(Dataset):
-    def __init__(self, csv_file, transform=None, data_dir="DDI/images"):
-        self.df = pd.read_csv(csv_file)
+    def __init__(self, csv_file=None, transform=None, data_dir="DDI/images", dataframe=None):
+        if dataframe is not None:
+            self.df = dataframe.copy()
+        elif csv_file is not None:
+            self.df = pd.read_csv(csv_file)
+        else:
+            raise ValueError("Provide csv_file or dataframe")
         self.transform = transform
         self.data_dir = data_dir
 
@@ -147,31 +155,38 @@ def train_epoch(model,loader,optimizer,criterion):
     model.train()
 
     total_loss = 0
+    preds = []
+    labels = []
 
     for x,y,_ in loader:
 
         x = x.to(DEVICE)
         y = y.to(DEVICE, dtype=torch.long)
-
         x,y_a,y_b,lam = mixup(x,y)
-
         outputs,aux = model(x)
-
         loss1 = criterion(outputs,y_a)*lam + criterion(outputs,y_b)*(1-lam)
-
         loss2 = criterion(aux,y_a)*lam + criterion(aux,y_b)*(1-lam)
-
         loss = loss1 + 0.4*loss2
 
         optimizer.zero_grad()
-
         loss.backward()
-
         optimizer.step()
 
         total_loss += loss.item()
 
-    return total_loss/len(loader)
+        with torch.no_grad():
+            prob = torch.softmax(outputs, dim=1)[:,1]
+            preds.extend(prob.detach().cpu().numpy())
+            labels.extend(y.detach().cpu().numpy())
+        
+    avg_loss = total_loss / len(loader)
+
+    preds = np.array(preds)
+    labels = np.array(labels)
+
+    train_auc = roc_auc_score(labels, preds)
+
+    return avg_loss, train_auc
 
 
 # ---------------------------------------------------
@@ -273,13 +288,41 @@ def baseline_evaluation(model, test_loader, model_name, seed):
 
 
 # ---------------------------------------------------
+# 5-fold stratified CV (train + val); test set held out
+# ---------------------------------------------------
+
+def _stratify_labels_for_cv(df):
+    """Match finetuning_setup joint strata when present; else binary malignant."""
+    if "stratify" in df.columns:
+        return pd.Categorical(df["stratify"]).codes
+    return df["malignant"].values
+
+
+def train_val_split_for_fold(seed, fold):
+    """Combine train.csv + val.csv; return train/val DataFrames for one CV fold."""
+    full_df = pd.concat(
+        [pd.read_csv("train.csv"), pd.read_csv("val.csv")],
+        ignore_index=True,
+    )
+    aligned = DDIDataset(dataframe=full_df, transform=train_tf).df
+    y = _stratify_labels_for_cv(aligned)
+    skf = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=seed)
+    splits = list(skf.split(np.zeros(len(y)), y))
+    train_idx, val_idx = splits[fold]
+    train_df = aligned.iloc[train_idx].reset_index(drop=True)
+    val_df = aligned.iloc[val_idx].reset_index(drop=True)
+    return train_df, val_df
+
+
+# ---------------------------------------------------
 # Training: best checkpoint by validation loss (full MAX_EPOCHS)
 # ---------------------------------------------------
 
-def train_model(seed, model_name):
+def train_model(seed, model_name, fold):
   
     train_losses = []
     val_losses = []
+    train_aucs = []
     val_aucs = []
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -287,8 +330,13 @@ def train_model(seed, model_name):
     model = load_model(model_name)
     model = model.to(DEVICE)
 
-    train_ds = DDIDataset("train.csv", train_tf)
-    val_ds = DDIDataset("val.csv", val_tf)
+    train_df, val_df = train_val_split_for_fold(seed, fold)
+    print(
+        f"CV fold {fold}/{N_FOLDS - 1}: train_n={len(train_df)} val_n={len(val_df)} "
+        f"(train+val from train.csv + val.csv; test.csv held out)"
+    )
+    train_ds = DDIDataset(dataframe=train_df, transform=train_tf)
+    val_ds = DDIDataset(dataframe=val_df, transform=val_tf)
     test_ds = DDIDataset("test.csv", val_tf)
 
     train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
@@ -304,14 +352,17 @@ def train_model(seed, model_name):
     )
 
     criterion = torch.nn.CrossEntropyLoss()
-    patience_counter = 0
-    best_val_loss = float("inf")  # track minimum validation loss (checkpoint selection)
 
+    best_checkpoints = []  # will store (-val_loss, path)
+    
     for epoch in range(MAX_EPOCHS):
 
         # Train one epoch
-        train_loss = train_epoch(model, train_loader, optimizer, criterion)
+        train_loss, train_auc = train_epoch(model, train_loader, optimizer, criterion)
+
         train_losses.append(train_loss)
+        train_aucs.append(train_auc)
+
         # Validation: loss + AUC (single pass)
         model.eval()
         val_loss = 0.0
@@ -340,25 +391,38 @@ def train_model(seed, model_name):
         val_aucs.append(val_auc)
 
         print(
-            f"seed={seed} epoch={epoch} val_loss={val_loss:.6f} val_auc={val_auc:.4f} "
-            f"(best_val_loss={best_val_loss:.6f})"
+            f"seed={seed} epoch={epoch} "
+            f"train_loss={train_loss:.4f} train_auc={train_auc:.4f} | "
+            f"val_loss={val_loss:.4f} val_auc={val_auc:.4f} | "
         )
 
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            patience_counter = 0
-            # Save best model based on val loss
-            torch.save(model.state_dict(), f"{model_name}_seed{seed}.pth")
-        else:
-            patience_counter += 1
-        if patience_counter > PATIENCE:
-            print(f"Early stopping at epoch {epoch} for seed {seed}")
-            break
+        save_path = f"{model_name}_seed{seed}_epoch{epoch}.pth"
 
-    plt.figure(figsize=(10,5))
+        # Save full checkpoint
+        checkpoint = {
+            "epoch": epoch,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "val_loss": val_loss,
+        }
+
+        torch.save(checkpoint, save_path)
+
+        # Push into heap (negative because heapq is min-heap)
+        heapq.heappush(best_checkpoints, (-val_loss, save_path))
+
+        # If more than TOP_K, remove worst
+        if len(best_checkpoints) > TOP_K:
+            worst = heapq.heappop(best_checkpoints)
+            worst_path = worst[1]
+
+            if os.path.exists(worst_path):
+                os.remove(worst_path)
+
+    plt.figure(figsize=(15,5))
 
     # Loss plot
-    plt.subplot(1,2,1)
+    plt.subplot(1,3,1)
     plt.plot(train_losses, label="Train Loss")
     plt.plot(val_losses, label="Val Loss")
     plt.xlabel("Epoch")
@@ -367,7 +431,8 @@ def train_model(seed, model_name):
     plt.legend()
 
     # AUC plot
-    plt.subplot(1,2,2)
+    plt.subplot(1,3,3)
+    plt.plot(train_aucs, label="Train AUC")
     plt.plot(val_aucs, label="Val AUC")
     plt.xlabel("Epoch")
     plt.ylabel("AUC")
@@ -378,6 +443,12 @@ def train_model(seed, model_name):
     plt.savefig(f"{model_name}_seed{seed}_learning_curve.png")
     plt.close()
 
+    print("\nTop-K checkpoints:")
+    sorted_ckpts = sorted(best_checkpoints, reverse=True)  # best first
+
+    for score, path in sorted_ckpts:
+        print(f"{path} | val_loss={-score:.6f}")
+
 # ---------------------------------------------------
 # Run experiments
 # ---------------------------------------------------
@@ -387,4 +458,6 @@ for model_name in [#"DeepDerm",
 
     for seed in SEEDS:
 
-        train_model(seed,model_name)
+        for fold in range(N_FOLDS):
+
+            train_model(seed, model_name, fold)

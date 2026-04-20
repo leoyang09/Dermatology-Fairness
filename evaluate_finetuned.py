@@ -1,4 +1,5 @@
 import os
+import re
 import pickle
 import torch
 import numpy as np
@@ -134,15 +135,52 @@ def eval_model_on_csv(model, csv_file, data_dir):
 # ---------------------------
 # Load fine-tuned weights per seed
 # ---------------------------
-def load_seed_model(model_name, seed, model_dir="."):
+import os
+import torch
+
+def load_seed_model(model_name, seed, epoch=None, model_dir="."):
     base_model = load_model(model_name, download=False)
-    weights_path = os.path.join(model_dir, f"{model_name}_seed{seed}.pth")
+
+    # Build filename
+    if epoch is None:
+        weights_path = os.path.join(model_dir, f"{model_name}_seed{seed}.pth")
+        model_tag = f"{model_name}_seed{seed}"
+    else:
+        weights_path = os.path.join(
+            model_dir, f"{model_name}_seed{seed}_epoch{epoch}.pth"
+        )
+        model_tag = f"{model_name}_seed{seed}_epoch{epoch}"
+
     if not os.path.exists(weights_path):
         raise FileNotFoundError(f"Missing weights: {weights_path}")
-    state_dict = torch.load(weights_path, map_location=DEVICE)
+
+    checkpoint = torch.load(weights_path, map_location=DEVICE)
+
+    if isinstance(checkpoint, dict):
+        if "model_state_dict" in checkpoint:
+            state_dict = checkpoint["model_state_dict"]
+        elif "state_dict" in checkpoint:
+            state_dict = checkpoint["state_dict"]
+        else:
+            state_dict = checkpoint
+    else:
+        state_dict = checkpoint
+
     base_model.load_state_dict(state_dict)
-    base_model._ddi_name = f"{model_name}_seed{seed}"
+
+    base_model._ddi_name = model_tag
     return base_model
+
+def find_available_epochs(model_name, seed, model_dir):
+    pattern = re.compile(rf"{model_name}_seed{seed}_epoch(\d+)\.pth")
+    epochs = []
+
+    for fname in os.listdir(model_dir):
+        match = pattern.match(fname)
+        if match:
+            epochs.append(int(match.group(1)))
+
+    return sorted(epochs)
 
 # ---------------------------
 # MAIN
@@ -154,22 +192,47 @@ if __name__ == "__main__":
     EVAL_DIR = "DDI-results/baseline_finetuned_models"
     os.makedirs(EVAL_DIR, exist_ok=True)
 
-    MODEL_NAMES = ["DeepDerm", "HAM10000"]
-    NUM_SEEDS = 5
+    MODEL_NAMES = [
+    #"DeepDerm", 
+    "HAM10000"
+    ]
+    NUM_SEEDS = 1
 
     for model_name in MODEL_NAMES:
         for seed in range(NUM_SEEDS):
-            print(f"Evaluating {model_name} seed {seed}...")
-            try:
-                model = load_seed_model(model_name, seed, model_dir=WEIGHTS_DIR)
-            except FileNotFoundError as e:
-                print(e)
-                continue
 
-            results = eval_model_on_csv(model, TEST_CSV, DATA_DIR)
+            epochs = find_available_epochs(model_name, seed, WEIGHTS_DIR)
 
-            save_path = os.path.join(EVAL_DIR, f"{model_name}_seed{seed}-evaluation.pkl")
-            with open(save_path, "wb") as f:
-                pickle.dump(results, f)
+            # fallback if no epoch files exist
+            if not epochs:
+                epochs = [None]
 
-            print(f"Done. AUC: {results['ROC_AUC']:.4f}. Saved to {save_path}")
+            for epoch in epochs:
+                tag = f"seed {seed}" if epoch is None else f"seed {seed} epoch {epoch}"
+                print(f"Evaluating {model_name} {tag}...")
+
+                try:
+                    model = load_seed_model(
+                        model_name,
+                        seed,
+                        epoch=epoch,
+                        model_dir=WEIGHTS_DIR
+                    )
+                except FileNotFoundError as e:
+                    print(e)
+                    continue
+
+                results = eval_model_on_csv(model, TEST_CSV, DATA_DIR)
+
+                # Save path
+                if epoch is None:
+                    save_name = f"{model_name}_seed{seed}-evaluation.pkl"
+                else:
+                    save_name = f"{model_name}_seed{seed}_epoch{epoch}-evaluation.pkl"
+
+                save_path = os.path.join(EVAL_DIR, save_name)
+
+                with open(save_path, "wb") as f:
+                    pickle.dump(results, f)
+
+                print(f"Done. AUC: {results['ROC_AUC']:.4f}. Saved to {save_path}")

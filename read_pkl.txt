@@ -1,0 +1,95 @@
+import pickle
+import argparse
+import pandas as pd
+import os
+import glob
+
+
+def load_pkl(file_path):
+    with open(file_path, "rb") as f:
+        return pickle.load(f)
+
+
+def summarize_file(data, file_name):
+    return {
+        "file": file_name,
+        "model": data.get("model"),
+        "auc": data.get("ROC_AUC"),
+        "auc_ci": data.get("ROC_AUC_95CI"),
+        "threshold": data.get("threshold"),
+        "num_samples": len(data.get("true_labels", []))
+    }
+
+
+def to_dataframe(data, file_name):
+    df = pd.DataFrame({
+        "file": file_name,
+        "model": data.get("model"),
+        "image": data["images"],
+        "true_label": data["true_labels"],
+        "predicted_prob": data["predicted_labels"],
+        "skin_tone": data["skin_tones"],
+    })
+    return df
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Read multiple .pkl evaluation files")
+    parser.add_argument("--dir", type=str, help="Directory containing .pkl files")
+    parser.add_argument("--files", nargs="+", help="List of specific .pkl files")
+    parser.add_argument("--save_csv", type=str, default=None, help="Save combined predictions CSV")
+    parser.add_argument("--summary_csv", type=str, default=None, help="Save summary CSV")
+
+    args = parser.parse_args()
+
+    # Collect file paths
+    file_paths = []
+    if args.dir:
+        file_paths.extend(glob.glob(os.path.join(args.dir, "*.pkl")))
+    if args.files:
+        file_paths.extend(args.files)
+
+    if not file_paths:
+        print("No .pkl files found!")
+        return
+
+    print(f"Found {len(file_paths)} files\n")
+
+    all_dfs = []
+    summaries = []
+
+    for path in file_paths:
+        print(f"Processing: {path}")
+        data = load_pkl(path)
+
+        # Summary
+        summary = summarize_file(data, os.path.basename(path))
+        summaries.append(summary)
+
+        print(f"  Model: {summary['model']}")
+        print(f"  AUC: {summary['auc']}")
+        print(f"  Samples: {summary['num_samples']}")
+
+        # Full dataframe
+        df = to_dataframe(data, os.path.basename(path))
+        all_dfs.append(df)
+
+    # Combine all predictions
+    combined_df = pd.concat(all_dfs, ignore_index=True)
+    summary_df = pd.DataFrame(summaries)
+
+    print("\n=== Summary Table ===")
+    print(summary_df)
+
+    # Save outputs
+    if args.save_csv:
+        combined_df.to_csv(args.save_csv, index=False)
+        print(f"\nSaved combined predictions to: {args.save_csv}")
+
+    if args.summary_csv:
+        summary_df.to_csv(args.summary_csv, index=False)
+        print(f"Saved summary to: {args.summary_csv}")
+
+
+if __name__ == "__main__":
+    main()

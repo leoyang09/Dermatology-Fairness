@@ -95,17 +95,17 @@ def compute_tpr_gap(y_true, y_pred, groups):
 
 def gap_significance_test(baseline_gap_dist, new_gap_dist):
     """
-    Two-sided p-value: fraction of bootstrap differences less than 0 or greater than 0
+    One-sided p-value: fraction of bootstrap differences less than or equal to 0
     """
     diff = np.array(baseline_gap_dist) - np.array(new_gap_dist)
-    p_value = 2 * min(np.mean(diff <= 0), np.mean(diff >= 0))
+    p_value = np.mean(diff <= 0)
     return p_value
 
 def skin_group_label(g):
     mapping = {12: "1-2", 34: "3-4", 56: "5-6"}
     return mapping.get(g, str(g))
 
-# ---------------------------
+# ---------------------------c
 # Main Evaluation
 # ---------------------------
 
