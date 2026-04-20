@@ -9,6 +9,7 @@ from torch.utils.data import Dataset, DataLoader
 from PIL import Image
 import os
 from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import StratifiedKFold
 from eval_data import load_model
 
 
@@ -21,6 +22,7 @@ MAX_EPOCHS = 500
 PATIENCE = 20
 
 SEEDS = [0,1,2,3,4]
+N_FOLDS = 5
 
 DATA_DIR = "DDI"
 
@@ -85,8 +87,13 @@ val_tf = transforms.Compose([
 # ---------------------------------------------------
 
 class DDIDataset(Dataset):
-    def __init__(self, csv_file, transform=None, data_dir="DDI/images"):
-        self.df = pd.read_csv(csv_file)
+    def __init__(self, csv_file=None, transform=None, data_dir="DDI/images", dataframe=None):
+        if dataframe is not None:
+            self.df = dataframe.copy()
+        elif csv_file is not None:
+            self.df = pd.read_csv(csv_file)
+        else:
+            raise ValueError("Provide csv_file or dataframe")
         self.transform = transform
         self.data_dir = data_dir
 
@@ -276,7 +283,30 @@ def baseline_evaluation(model, test_loader, model_name, seed):
 # Training: best checkpoint by validation loss (full MAX_EPOCHS)
 # ---------------------------------------------------
 
-def train_model(seed, model_name):
+def _stratify_labels_for_cv(df):
+    """Match finetuning_setup joint strata when present; else binary malignant."""
+    if "stratify" in df.columns:
+        return pd.Categorical(df["stratify"]).codes
+    return df["malignant"].values
+
+
+def train_val_split_for_fold(seed, fold):
+    """Combine train.csv + val.csv; return train/val DataFrames for one CV fold."""
+    full_df = pd.concat(
+        [pd.read_csv("train.csv"), pd.read_csv("val.csv")],
+        ignore_index=True,
+    )
+    aligned = DDIDataset(dataframe=full_df, transform=train_tf).df
+    y = _stratify_labels_for_cv(aligned)
+    skf = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=seed)
+    splits = list(skf.split(np.zeros(len(y)), y))
+    train_idx, val_idx = splits[fold]
+    train_df = aligned.iloc[train_idx].reset_index(drop=True)
+    val_df = aligned.iloc[val_idx].reset_index(drop=True)
+    return train_df, val_df
+
+
+def train_model(seed, model_name, fold):
   
     train_losses = []
     val_losses = []
@@ -287,8 +317,14 @@ def train_model(seed, model_name):
     model = load_model(model_name)
     model = model.to(DEVICE)
 
-    train_ds = DDIDataset("train.csv", train_tf)
-    val_ds = DDIDataset("val.csv", val_tf)
+    train_df, val_df = train_val_split_for_fold(seed, fold)
+    print(
+        f"CV fold {fold}/{N_FOLDS - 1}: train_n={len(train_df)} val_n={len(val_df)} "
+        f"(train+val from train.csv + val.csv; test.csv held out)"
+    )
+
+    train_ds = DDIDataset(dataframe=train_df, transform=train_tf)
+    val_ds = DDIDataset(dataframe=val_df, transform=val_tf)
     test_ds = DDIDataset("test.csv", val_tf)
 
     train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
@@ -340,19 +376,17 @@ def train_model(seed, model_name):
         val_aucs.append(val_auc)
 
         print(
-            f"seed={seed} epoch={epoch} val_loss={val_loss:.6f} val_auc={val_auc:.4f} "
+            f"seed={seed} fold={fold} epoch={epoch} val_loss={val_loss:.6f} val_auc={val_auc:.4f} "
             f"(best_val_loss={best_val_loss:.6f})"
         )
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             patience_counter = 0
-            # Save best model based on val loss
-            torch.save(model.state_dict(), f"{model_name}_seed{seed}.pth")
         else:
             patience_counter += 1
         if patience_counter > PATIENCE:
-            print(f"Early stopping at epoch {epoch} for seed {seed}")
+            print(f"Early stopping at epoch {epoch} for seed {seed} fold {fold}")
             break
 
     plt.figure(figsize=(10,5))
@@ -363,7 +397,7 @@ def train_model(seed, model_name):
     plt.plot(val_losses, label="Val Loss")
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
-    plt.title(f"{model_name} Seed {seed} Loss")
+    plt.title(f"{model_name} Seed {seed} Fold {fold} Loss")
     plt.legend()
 
     # AUC plot
@@ -371,11 +405,11 @@ def train_model(seed, model_name):
     plt.plot(val_aucs, label="Val AUC")
     plt.xlabel("Epoch")
     plt.ylabel("AUC")
-    plt.title(f"{model_name} Seed {seed} AUC")
+    plt.title(f"{model_name} Seed {seed} Fold {fold} AUC")
     plt.legend()
 
     plt.tight_layout()
-    plt.savefig(f"{model_name}_seed{seed}_learning_curve.png")
+    plt.savefig(f"{model_name}_seed{seed}_fold{fold}_learning_curve.png")
     plt.close()
 
 # ---------------------------------------------------
@@ -387,4 +421,6 @@ for model_name in [#"DeepDerm",
 
     for seed in SEEDS:
 
-        train_model(seed,model_name)
+        for fold in range(N_FOLDS):
+
+            train_model(seed, model_name, fold)
