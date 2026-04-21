@@ -9,7 +9,7 @@ from torch.utils.data import Dataset, DataLoader
 from PIL import Image
 import os
 from sklearn.metrics import roc_auc_score
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedKFold, train_test_split
 from eval_data import load_model
 import heapq
 
@@ -299,19 +299,30 @@ def _stratify_labels_for_cv(df):
 
 
 def train_val_split_for_fold(seed, fold):
-    """Combine train.csv + val.csv; return train/val DataFrames for one CV fold."""
+    """Combine train/val/test CSVs; return train/val/test DataFrames for one CV fold."""
     full_df = pd.concat(
-        [pd.read_csv("train.csv"), pd.read_csv("val.csv")],
+        [pd.read_csv("train.csv"), pd.read_csv("val.csv"), pd.read_csv("test.csv")],
         ignore_index=True,
     )
     aligned = DDIDataset(dataframe=full_df, transform=train_tf).df
     y = _stratify_labels_for_cv(aligned)
     skf = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=seed)
     splits = list(skf.split(np.zeros(len(y)), y))
-    train_idx, val_idx = splits[fold]
-    train_df = aligned.iloc[train_idx].reset_index(drop=True)
-    val_df = aligned.iloc[val_idx].reset_index(drop=True)
-    return train_df, val_df
+    dev_idx, test_idx = splits[fold]
+    dev_df = aligned.iloc[dev_idx].reset_index(drop=True)
+    test_df = aligned.iloc[test_idx].reset_index(drop=True)
+
+    # Keep validation for checkpoint selection: 20% overall = 25% of dev (80%).
+    dev_y = _stratify_labels_for_cv(dev_df)
+    train_df, val_df = train_test_split(
+        dev_df,
+        test_size=0.25,
+        random_state=seed,
+        stratify=dev_y,
+    )
+    train_df = train_df.reset_index(drop=True)
+    val_df = val_df.reset_index(drop=True)
+    return train_df, val_df, test_df
 
 
 # ---------------------------------------------------
@@ -330,14 +341,14 @@ def train_model(seed, model_name, fold):
     model = load_model(model_name)
     model = model.to(DEVICE)
 
-    train_df, val_df = train_val_split_for_fold(seed, fold)
+    train_df, val_df, test_df = train_val_split_for_fold(seed, fold)
     print(
         f"CV fold {fold}/{N_FOLDS - 1}: train_n={len(train_df)} val_n={len(val_df)} "
-        f"(train+val from train.csv + val.csv; test.csv held out)"
+        f"test_n={len(test_df)} (rotating 20% test fold)"
     )
     train_ds = DDIDataset(dataframe=train_df, transform=train_tf)
     val_ds = DDIDataset(dataframe=val_df, transform=val_tf)
-    test_ds = DDIDataset("test.csv", val_tf)
+    test_ds = DDIDataset(dataframe=test_df, transform=val_tf)
 
     train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE)
@@ -391,12 +402,12 @@ def train_model(seed, model_name, fold):
         val_aucs.append(val_auc)
 
         print(
-            f"seed={seed} epoch={epoch} "
+            f"seed={seed} fold={fold} epoch={epoch} "
             f"train_loss={train_loss:.4f} train_auc={train_auc:.4f} | "
             f"val_loss={val_loss:.4f} val_auc={val_auc:.4f} | "
         )
 
-        save_path = f"{model_name}_seed{seed}_epoch{epoch}.pth"
+        save_path = f"{model_name}_seed{seed}_fold{fold}_epoch{epoch}.pth"
 
         # Save full checkpoint
         checkpoint = {
@@ -427,7 +438,7 @@ def train_model(seed, model_name, fold):
     plt.plot(val_losses, label="Val Loss")
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
-    plt.title(f"{model_name} Seed {seed} Loss")
+    plt.title(f"{model_name} Seed {seed} Fold {fold} Loss")
     plt.legend()
 
     # AUC plot
@@ -436,11 +447,11 @@ def train_model(seed, model_name, fold):
     plt.plot(val_aucs, label="Val AUC")
     plt.xlabel("Epoch")
     plt.ylabel("AUC")
-    plt.title(f"{model_name} Seed {seed} AUC")
+    plt.title(f"{model_name} Seed {seed} Fold {fold} AUC")
     plt.legend()
 
     plt.tight_layout()
-    plt.savefig(f"{model_name}_seed{seed}_learning_curve.png")
+    plt.savefig(f"{model_name}_seed{seed}_fold{fold}_learning_curve.png")
     plt.close()
 
     print("\nTop-K checkpoints:")
