@@ -332,7 +332,7 @@ def main():
     regenerate_seed0_fold_test_csvs(k_folds=args.k_folds, split_dir=args.split_dir)
 
     # All pairwise gaps among default tone groups (project uses 12, 34, 56).
-    tone_pairs = [(12, 34), (12, 56), (34, 56)]
+    tone_pairs = [(12, 56)]
 
     all_rows = []
     for seed in args.seeds:
