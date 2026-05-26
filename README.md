@@ -13,7 +13,7 @@ Here is what I engineered for this repo:
 * **`evaluate_fairness_paired.py`**: The statistical evaluation framework I wrote to run paired testing and prove the fairness improvements were not just random noise.
 
 ## What I Learned / Results
-* I found that optimizing specifically for minority class fairness helped close the accuracy gap by about 97.7%, though it required a slight trade-off in overall processing speed.*
+* I found that optimizing specifically for minority class fairness helped close the accuracy gap by about 97.7%, though it required a slight trade-off in overall processing speed.
 * All of my test runs and statistical summaries are saved under the `results/` directory.
 
 ## How to Run the Code
