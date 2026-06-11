@@ -1,0 +1,83 @@
+{
+  "fst12": {
+    "group": "fst12",
+    "tone_value": 12,
+    "baseline_auc": 0.7175449222693318,
+    "winners": [
+      "local_contrast"
+    ],
+    "best_pipeline": "local_contrast",
+    "best_params": {
+      "local_contrast_strength": 1.9956892748418475
+    },
+    "best_auc_stage3": 0.7470220068645266,
+    "test_results": {
+      "n_test": 132,
+      "overall_auc": 0.6512518409425626,
+      "accuracy": 0.7727272727272727,
+      "f1": 0.375,
+      "target_group_auc": 0.51875,
+      "fairness_gap_fst12_fst56": -0.19062499999999993,
+      "per_tone_auc": {
+        "fst12": 0.51875,
+        "fst34": 0.7171717171717171,
+        "fst56": 0.709375
+      }
+    },
+    "model_path": "/content/drive/MyDrive/fairness_pipeline_results/model_fst12.pth"
+  },
+  "fst34": {
+    "group": "fst34",
+    "tone_value": 34,
+    "baseline_auc": 0.7111054895016442,
+    "winners": [
+      "local_contrast",
+      "percentile_norm"
+    ],
+    "best_pipeline": "local_contrast+percentile_norm",
+    "best_params": {
+      "local_contrast_strength": 1.4907884894416696,
+      "percentile_norm_range_": 91.3745111997437
+    },
+    "best_auc_stage3": 0.7350113837591703,
+    "test_results": {
+      "n_test": 132,
+      "overall_auc": 0.6379970544918998,
+      "accuracy": 0.7348484848484849,
+      "f1": 0.3137254901960784,
+      "target_group_auc": 0.6424242424242423,
+      "fairness_gap_fst12_fst56": -0.13437500000000002,
+      "per_tone_auc": {
+        "fst12": 0.553125,
+        "fst34": 0.6424242424242423,
+        "fst56": 0.6875
+      }
+    },
+    "model_path": "/content/drive/MyDrive/fairness_pipeline_results/model_fst34.pth"
+  },
+  "fst56": {
+    "group": "fst56",
+    "tone_value": 56,
+    "baseline_auc": 0.5934521342726896,
+    "winners": [
+      "Z_score_norm"
+    ],
+    "best_pipeline": "Z_score_norm",
+    "best_params": {},
+    "best_auc_stage3": 0.628470783257356,
+    "test_results": {
+      "n_test": 132,
+      "overall_auc": 0.5793814432989691,
+      "accuracy": 0.7575757575757576,
+      "f1": 0.3333333333333333,
+      "target_group_auc": 0.559375,
+      "fairness_gap_fst12_fst56": -0.050000000000000044,
+      "per_tone_auc": {
+        "fst12": 0.5093749999999999,
+        "fst34": 0.6747474747474748,
+        "fst56": 0.559375
+      }
+    },
+    "model_path": "/content/drive/MyDrive/fairness_pipeline_results/model_fst56.pth"
+  }
+}

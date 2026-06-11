@@ -1,0 +1,76 @@
+{
+  "group": "fst56",
+  "tone_value": 56,
+  "baseline_auc": 0.5934521342726896,
+  "stage1_results": [
+    {
+      "method": "clahe",
+      "auc": 0.5669291338582677,
+      "delta": -0.026523000414421904
+    },
+    {
+      "method": "illumination_comp",
+      "auc": 0.5859925404061335,
+      "delta": -0.007459593866556147
+    },
+    {
+      "method": "percentile_norm",
+      "auc": 0.5926232905097389,
+      "delta": -0.0008288437629506706
+    },
+    {
+      "method": "local_contrast",
+      "auc": 0.5410277662660589,
+      "delta": -0.05242436800663075
+    },
+    {
+      "method": "bilateral",
+      "auc": 0.5449647741400745,
+      "delta": -0.04848736013261512
+    },
+    {
+      "method": "non_local_means",
+      "auc": 0.5391628677994197,
+      "delta": -0.054289266473269926
+    },
+    {
+      "method": "Z_score_norm",
+      "auc": 0.628470783257356,
+      "delta": 0.035018648984666334
+    },
+    {
+      "method": "adaptive_gamma",
+      "auc": 0.598217985909656,
+      "delta": 0.004765851636966412
+    },
+    {
+      "method": "msrcr",
+      "auc": 0.5302527973476999,
+      "delta": -0.06319933692498969
+    },
+    {
+      "method": "white_balance",
+      "auc": 0.5679651885619561,
+      "delta": -0.02548694571073351
+    }
+  ],
+  "winners": [
+    "Z_score_norm"
+  ],
+  "best_pipeline": "Z_score_norm",
+  "best_params": {},
+  "best_auc_stage3": 0.628470783257356,
+  "test_results": {
+    "n_test": 132,
+    "overall_auc": 0.5793814432989691,
+    "accuracy": 0.7575757575757576,
+    "f1": 0.3333333333333333,
+    "target_group_auc": 0.559375,
+    "fairness_gap_fst12_fst56": -0.050000000000000044,
+    "per_tone_auc": {
+      "fst12": 0.5093749999999999,
+      "fst34": 0.6747474747474748,
+      "fst56": 0.559375
+    }
+  }
+}
